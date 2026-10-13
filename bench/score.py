@@ -3,6 +3,9 @@ import cv2
 import numpy as np
 from PIL import Image
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from bgremove import levels, veto
+
 data = sys.argv[1]
 picked = json.load(open(f"{data}/set.json"))
 names = sorted(picked)
@@ -11,21 +14,8 @@ models = [m for m in ("birefnet-general", "birefnet-massive", "bria-rmbg", "bire
                       "u2net", "silueta", "u2net_human_seg", "u2netp") if os.path.isfile(f"{data}/pred/{m}.json")]
 
 
-def levels(low, high):
-    return np.clip((np.arange(256, dtype=np.float32) - low) * 255 / (high - low), 0, 255).astype(np.uint8)
-
-
 def read(path):
     return np.asarray(Image.open(path).convert("L"))
-
-
-def veto(mask, coarse):
-    h, w = mask.shape
-    reach = max(3, int(0.012 * max(w, h))) | 1
-    brush = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (reach, reach))
-    near = cv2.GaussianBlur(cv2.dilate((coarse > 60).astype(np.uint8) * 255, brush), (0, 0), reach / 3)
-    agreed = (mask.astype(np.uint16) * near // 255).astype(np.uint8)
-    return agreed if int(agreed.sum()) >= 0.4 * int(mask.sum()) else mask
 
 
 def score(pred, gt):
@@ -55,17 +45,22 @@ def add(label, get):
 
 for m in models:
     add(m, lambda n, m=m: read(f"{data}/pred/{m}/{n}.png"))
+    cleaned = [score(levels(8, 245)[read(f"{data}/pred/{m}/{n}.png")], read(f"{data}/mask/{n}.png"))["err"] for n in names]
+    rows[m]["clean"] = round(statistics.mean(cleaned), 2)
 if "birefnet-general" in models:
     add("birefnet-general + levels", lambda n: levels(8, 245)[read(f"{data}/pred/birefnet-general/{n}.png")])
 if "isnet-general-use" in models and "u2netp" in models:
     add("isnet + levels", lambda n: levels(40, 215)[read(f"{data}/pred/isnet-general-use/{n}.png")])
-    add("isnet + levels + veto", lambda n: veto(levels(40, 215)[read(f"{data}/pred/isnet-general-use/{n}.png")], read(f"{data}/pred/u2netp/{n}.png")))
+    for keep in (0.4, 0.7, 0.85, 0.95):
+        add(f"isnet + levels + veto {keep}", lambda n, keep=keep: veto(levels(40, 215)[read(f"{data}/pred/isnet-general-use/{n}.png")],
+                                                                      read(f"{data}/pred/u2netp/{n}.png"), keep))
 
 speed = {}
 for m in models:
     d = json.load(open(f"{data}/pred/{m}.json"))
+    onnx = os.path.join(os.path.expanduser(os.environ.get("U2NET_HOME", "~/.u2net")), "models", m, m + ".onnx")
     speed[m] = {"seconds": round(statistics.median(d["times"]), 2), "load": d["load"], "ram_mb": d["rss_mb"],
-                "file_mb": round(os.path.getsize(os.path.join(os.path.expanduser(os.environ.get("U2NET_HOME", "~/.u2net")), "models", m, m + ".onnx")) / 1e6)}
+                "file_mb": round(os.path.getsize(onnx) / 1e6) if os.path.isfile(onnx) else 0}
 
 
 def lines(path):
@@ -75,10 +70,14 @@ def lines(path):
 json.dump({"images": len(names), "categories": {c: sum(v == c for v in picked.values()) for c in cats}, "accuracy": rows, "speed": speed,
            "threads": lines(f"{data}/threads.jsonl"), "video": lines(f"{data}/video.jsonl")}, open(f"{data}/results.json", "w"), indent=1)
 
-print("\n| model | error % | edge error % | IoU % | worst image | seconds | RAM | file |\n|---|---|---|---|---|---|---|---|")
+print("\n| model | error % | after levels | edge error % | IoU % | worst image |\n|---|---|---|---|---|---|")
 for m in models:
-    r, s = rows[m], speed[m]
-    print(f"| {m} | {r['err']:.2f} | {r['edge']:.1f} | {r['iou']:.1f} | {r['worst']:.1f} | {s['seconds']} | {s['ram_mb'] / 1024:.1f} GB | {s['file_mb']} MB |")
+    r = rows[m]
+    print(f"| {m} | {r['err']:.2f} | {r['clean']:.2f} | {r['edge']:.1f} | {r['iou']:.1f} | {r['worst']:.1f} |")
+print("\n| model | seconds | RAM | download |\n|---|---|---|---|")
+for m in models:
+    s = speed[m]
+    print(f"| {m} | {s['seconds']} | {s['ram_mb'] / 1024:.1f} GB | {s['file_mb']} MB |")
 print("\n| model | " + " | ".join(f"{c} ({sum(v == c for v in picked.values())})" for c in cats) + " |\n|---|" + "---|" * len(cats))
 for m in models:
     print(f"| {m} | " + " | ".join(f"{rows[m][c]:.2f}" for c in cats) + " |")
@@ -87,3 +86,13 @@ for label in rows:
     if label not in models or label in ("birefnet-general", "isnet-general-use"):
         r = rows[label]
         print(f"| {label} | {r['err']:.2f} | {r['edge']:.1f} | {r['iou']:.1f} | {r['worst']:.1f} |")
+
+rng = np.random.default_rng(0)
+print("\nerror of a minus error of b, 95% interval from resampling the images, and on how many images a is better")
+for a, b in (("birefnet-general-lite", "birefnet-general"), ("birefnet-portrait", "birefnet-general"), ("birefnet-massive", "birefnet-general"),
+             ("bria-rmbg", "birefnet-general"), ("isnet-general-use", "birefnet-general"), ("u2net", "isnet-general-use"),
+             ("isnet + levels + veto 0.4", "isnet + levels"), ("isnet + levels + veto 0.7", "isnet + levels")):
+    if a in rows and b in rows:
+        d = np.array([rows[a]["per"][n] - rows[b]["per"][n] for n in names])
+        lo, hi = np.percentile([d[rng.integers(0, len(d), len(d))].mean() for _ in range(10000)], [2.5, 97.5])
+        print(f"{a} vs {b}: {d.mean():+.2f} [{lo:+.2f}, {hi:+.2f}]  better on {int((d < 0).sum())}/{len(d)}")

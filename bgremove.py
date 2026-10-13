@@ -3,6 +3,7 @@ import argparse, json, os, queue, subprocess, sys, threading, time
 
 MAX_SIDE_PHOTO, MAX_SIDE_VIDEO = 4096, 1920
 VIDEO_EXT = (".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi")
+VETO_KEEP = 0.7
 
 
 def session(model, threads=None, copies=1):
@@ -23,6 +24,18 @@ def levels(low, high):
     return np.clip((np.arange(256, dtype=np.float32) - low) * 255 / (high - low), 0, 255).astype(np.uint8)
 
 
+# isnet keeps floor reflections on some video frames and they flicker. u2netp is too coarse to draw
+# the edge but doesnt make that mistake, so it only gets to veto
+def veto(mask, coarse, keep=VETO_KEEP):
+    import cv2
+    h, w = mask.shape
+    reach = max(3, int(0.012 * max(w, h))) | 1
+    brush = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (reach, reach))
+    near = cv2.GaussianBlur(cv2.dilate((coarse > 60).astype("uint8") * 255, brush), (0, 0), reach / 3)
+    agreed = (mask.astype("uint16") * near // 255).astype("uint8")
+    return agreed if int(agreed.sum()) >= keep * int(mask.sum()) else mask
+
+
 def cut_photo(src, out, bg="transparent", model="birefnet-general", glasses=True):
     import numpy as np
     from PIL import Image, ImageOps
@@ -35,7 +48,7 @@ def cut_photo(src, out, bg="transparent", model="birefnet-general", glasses=True
     im = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
     if max(im.size) > MAX_SIDE_PHOTO:
         im.thumbnail((MAX_SIDE_PHOTO, MAX_SIDE_PHOTO), Image.LANCZOS)
-    alpha = np.asarray(remove(im, session=session(model)[0], only_mask=True).convert("L"))
+    alpha = np.asarray(remove(im, session=session(model, min(os.cpu_count() or 4, 8))[0], only_mask=True).convert("L"))
     alpha = levels(8, 245)[alpha]
     rgb = np.asarray(im).copy()
     if glasses:
@@ -86,8 +99,7 @@ def probe(path):
     return w, h, float(num) / float(den or 1), float(d.get("format", {}).get("duration") or 0)
 
 
-def cut_video(src, out, bg="00b140", sessions=None, veto=True):
-    import cv2
+def cut_video(src, out, bg="00b140", sessions=None, second=True):
     import numpy as np
     from PIL import Image
     from rembg import remove
@@ -100,9 +112,7 @@ def cut_video(src, out, bg="00b140", sessions=None, veto=True):
     cores = os.cpu_count() or 4
     each = min(4, cores)
     n = sessions or max(1, cores // each)
-    pool = list(zip(session("isnet-general-use", each, n), session("u2netp", each, n) if veto else [None] * n))
-    reach = max(3, int(0.012 * max(w, h))) | 1
-    brush = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (reach, reach))
+    pool = list(zip(session("isnet-general-use", each, n), session("u2netp", each, n) if second else [None] * n))
 
     decode = subprocess.Popen(["ffmpeg", "-v", "error", "-i", src, "-vf", f"fps={fps:.3f},scale={w}:{h}", "-f", "rawvideo",
                                "-pix_fmt", "rgb24", "pipe:1"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -125,7 +135,7 @@ def cut_video(src, out, bg="00b140", sessions=None, veto=True):
     failed = []
 
     def cut_frames(pair):
-        first, second = pair
+        first, coarse = pair
         while True:
             item = todo.get()
             if item is None:
@@ -134,14 +144,8 @@ def cut_video(src, out, bg="00b140", sessions=None, veto=True):
             try:
                 frame = Image.frombuffer("RGB", (w, h), raw, "raw", "RGB", 0, 1)
                 mask = lut[np.asarray(remove(frame, session=first, only_mask=True).resize((w, h), Image.BILINEAR), dtype=np.uint8)]
-                if second is not None:
-                    # isnet keeps floor reflections on some frames and they flicker. u2netp is too coarse to
-                    # draw the edge but doesnt make that mistake, so it only gets to veto
-                    coarse = np.asarray(remove(frame, session=second, only_mask=True).resize((w, h), Image.BILINEAR), dtype=np.uint8)
-                    near = cv2.GaussianBlur(cv2.dilate((coarse > 60).astype(np.uint8) * 255, brush), (0, 0), reach / 3)
-                    agreed = (mask.astype(np.uint16) * near // 255).astype(np.uint8)
-                    if int(agreed.sum()) >= 0.4 * int(mask.sum()):
-                        mask = agreed
+                if coarse is not None:
+                    mask = veto(mask, np.asarray(remove(frame, session=coarse, only_mask=True).resize((w, h), Image.BILINEAR), dtype=np.uint8))
                 pixels = np.frombuffer(raw, dtype=np.uint8).reshape(h, w, 3)
                 if fill is None:
                     result = np.dstack([pixels * (mask > 0)[..., None], mask]).tobytes()
@@ -209,7 +213,7 @@ def main():
     ap.add_argument("--bg", default=None, help="transparent or a hex colour like ffffff (photo: transparent, video: 00b140)")
     ap.add_argument("--model", default="birefnet-general", help="photo model, any rembg name (isnet-general-use is the fast one)")
     ap.add_argument("--no-glasses", action="store_true")
-    ap.add_argument("--no-veto", action="store_true", help="video: skip the second model, about 15%% faster")
+    ap.add_argument("--no-veto", action="store_true", help="video: skip the second model, a bit faster")
     a = ap.parse_args()
     if not os.path.isfile(a.file):
         sys.exit(f"no such file: {a.file}")
@@ -221,7 +225,7 @@ def main():
     started = time.time()
     if video:
         out = a.out or f"{stem}-no-bg.{'webm' if bg == 'transparent' else 'mp4'}"
-        cut_video(a.file, out, bg, veto=not a.no_veto)
+        cut_video(a.file, out, bg, second=not a.no_veto)
     else:
         out = a.out or f"{stem}-no-bg.png"
         cut_photo(a.file, out, bg, a.model, glasses=not a.no_glasses)
