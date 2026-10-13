@@ -36,6 +36,10 @@ def veto(mask, coarse, keep=VETO_KEEP):
     return agreed if int(agreed.sum()) >= keep * int(mask.sum()) else mask
 
 
+def step(text):
+    print(f"\r{text}...".ljust(32), end="", file=sys.stderr, flush=True)
+
+
 def cut_photo(src, out, bg="transparent", model="birefnet-general", glasses=True):
     import numpy as np
     from PIL import Image, ImageOps
@@ -48,7 +52,11 @@ def cut_photo(src, out, bg="transparent", model="birefnet-general", glasses=True
     im = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
     if max(im.size) > MAX_SIDE_PHOTO:
         im.thumbnail((MAX_SIDE_PHOTO, MAX_SIDE_PHOTO), Image.LANCZOS)
-    alpha = np.asarray(remove(im, session=session(model, min(os.cpu_count() or 4, 8))[0], only_mask=True).convert("L"))
+    step("loading model")
+    s = session(model, min(os.cpu_count() or 4, 8))[0]
+    step("removing background")
+    alpha = np.asarray(remove(im, session=s, only_mask=True).convert("L"))
+    step("cleaning edges")
     alpha = levels(8, 245)[alpha]
     rgb = np.asarray(im).copy()
     if glasses:
@@ -112,6 +120,7 @@ def cut_video(src, out, bg="00b140", sessions=None, second=True):
     cores = os.cpu_count() or 4
     each = min(4, cores)
     n = sessions or max(1, cores // each)
+    step("loading models")
     pool = list(zip(session("isnet-general-use", each, n), session("u2netp", each, n) if second else [None] * n))
 
     decode = subprocess.Popen(["ffmpeg", "-v", "error", "-i", src, "-vf", f"fps={fps:.3f},scale={w}:{h}", "-f", "rawvideo",
@@ -191,7 +200,8 @@ def cut_video(src, out, bg="00b140", sessions=None, second=True):
                 raise failed[0]
             encode.stdin.write(frame)
             written += 1
-            print(f"\r{written}/{max(total, written)} frames  {written / (time.time() - started):.1f}/s ", end="", file=sys.stderr)
+            rate = written / (time.time() - started)
+            print(f"\r{written}/{max(total, written)} frames  {rate:.1f}/s  {max(total - written, 0) / rate / 60:.1f} min left ", end="", file=sys.stderr)
         encode.stdin.close()
         err = encode.stderr.read().decode("utf-8", "replace")[-400:]
         if encode.wait() != 0:
@@ -229,6 +239,7 @@ def main():
     else:
         out = a.out or f"{stem}-no-bg.png"
         cut_photo(a.file, out, bg, a.model, glasses=not a.no_glasses)
+    print("\r" + " " * 32 + "\r", end="", file=sys.stderr)
     print(f"{out}  {time.time() - started:.1f}s")
 
 
