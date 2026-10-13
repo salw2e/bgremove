@@ -3,7 +3,7 @@ import argparse, json, os, queue, subprocess, sys, threading, time
 
 MAX_SIDE_PHOTO, MAX_SIDE_VIDEO = 4096, 1920
 VIDEO_EXT = (".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi")
-VETO_KEEP = 0.4
+VETO_KEEP = 0.7
 
 
 def session(model, threads=None, copies=1):
@@ -48,7 +48,7 @@ def cut_photo(src, out, bg="transparent", model="birefnet-general", glasses=True
     im = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
     if max(im.size) > MAX_SIDE_PHOTO:
         im.thumbnail((MAX_SIDE_PHOTO, MAX_SIDE_PHOTO), Image.LANCZOS)
-    alpha = np.asarray(remove(im, session=session(model)[0], only_mask=True).convert("L"))
+    alpha = np.asarray(remove(im, session=session(model, min(os.cpu_count() or 4, 8))[0], only_mask=True).convert("L"))
     alpha = levels(8, 245)[alpha]
     rgb = np.asarray(im).copy()
     if glasses:
@@ -213,7 +213,7 @@ def main():
     ap.add_argument("--bg", default=None, help="transparent or a hex colour like ffffff (photo: transparent, video: 00b140)")
     ap.add_argument("--model", default="birefnet-general", help="photo model, any rembg name (isnet-general-use is the fast one)")
     ap.add_argument("--no-glasses", action="store_true")
-    ap.add_argument("--no-veto", action="store_true", help="video: skip the second model, about 15%% faster")
+    ap.add_argument("--no-veto", action="store_true", help="video: skip the second model, a bit faster")
     a = ap.parse_args()
     if not os.path.isfile(a.file):
         sys.exit(f"no such file: {a.file}")

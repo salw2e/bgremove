@@ -9,7 +9,7 @@ rm -f $d/threads.jsonl $d/video.jsonl
 for m in u2netp isnet-general-use birefnet-general-lite birefnet-general; do
   for t in 1 2 4 8 16 24; do python bench/threads.py $m $d $t; done
 done
-for g in "1 24" "2 12" "4 6" "6 4" "8 3" "12 2" "24 1"; do
+for g in "1 24" "2 12" "4 6" "6 4" "8 3" "12 2"; do
   python bench/video.py $d $g plain
   python bench/video.py $d $g veto
 done

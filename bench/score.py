@@ -91,7 +91,7 @@ rng = np.random.default_rng(0)
 print("\nerror of a minus error of b, 95% interval from resampling the images, and on how many images a is better")
 for a, b in (("birefnet-general-lite", "birefnet-general"), ("birefnet-portrait", "birefnet-general"), ("birefnet-massive", "birefnet-general"),
              ("bria-rmbg", "birefnet-general"), ("isnet-general-use", "birefnet-general"), ("u2net", "isnet-general-use"),
-             ("isnet + levels + veto 0.4", "isnet + levels"), ("isnet + levels + veto 0.85", "isnet + levels")):
+             ("isnet + levels + veto 0.4", "isnet + levels"), ("isnet + levels + veto 0.7", "isnet + levels")):
     if a in rows and b in rows:
         d = np.array([rows[a]["per"][n] - rows[b]["per"][n] for n in names])
         lo, hi = np.percentile([d[rng.integers(0, len(d), len(d))].mean() for _ in range(10000)], [2.5, 97.5])
