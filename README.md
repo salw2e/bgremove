@@ -1,6 +1,6 @@
 # bgremove
 
-removes the background from a photo or a video on a normal cpu, no gpu. its the thing behind https://justsal.xyz/bgremove
+Background remover for photos and videos. Runs on CPU, no GPU needed. This is what runs behind https://justsal.xyz/bgremove.
 
 ```
 pip install -r requirements.txt
@@ -8,12 +8,12 @@ python bgremove.py photo.jpg
 python bgremove.py clip.mp4
 ```
 
-you get `photo-no-bg.png` (transparent) and `clip-no-bg.mp4` (on green so any editor can key it out). video needs ffmpeg installed. first run downloads the models, about 1.2 GB, after that it works offline
+Output is `photo-no-bg.png` (transparent) and `clip-no-bg.mp4` (green background). Video needs ffmpeg. The first run downloads about 1.2 GB of models.
 
 ```
-python bgremove.py photo.jpg --bg ffffff                 # white instead of transparent
-python bgremove.py photo.jpg --model isnet-general-use   # for small machines, a lot rougher
-python bgremove.py clip.mp4 --bg transparent             # webm with alpha, iphones cant play it
+python bgremove.py photo.jpg --bg ffffff                 # white background
+python bgremove.py photo.jpg --model isnet-general-use   # low RAM machines, rougher result
+python bgremove.py clip.mp4 --bg transparent             # WebM with alpha, iPhones can't play it
 python bgremove.py clip.mp4 -o out.mp4
 ```
 
@@ -22,26 +22,26 @@ python bgremove.py clip.mp4 -o out.mp4
   <img src="study/cut-tall.jpg" width="100%" alt="before and after: lion, hair in the wind, teddy bear">
 </picture>
 
-## what you need
+## Requirements
 
-| | ram | one 12 MP photo |
+| Model | RAM | 12 MP photo |
 |---|---|---|
-| default (birefnet) | 16 GB | 15 s |
+| default (birefnet-general) | 16 GB | 15 s |
 | `--model birefnet-general-lite` | 12 GB | 11 s |
 | `--model isnet-general-use` | 4 GB | 4.5 s |
 
-4 cores is enough and more than 8 doesnt help. video is slow, about 3 frames a second on 24 threads. no gpu numbers, i dont have one
+4 cores is enough, more than 8 doesn't help. Video runs at about 3 frames per second on 24 threads. Not tested on a GPU.
 
-## which model
+## Model comparison
 
-i ran 10 of them on 100 photos that have a hand drawn cutout. birefnet is off by 0.6%, isnet (the best of the fast ones) by 3.4%, and its not rough edges, its whole pieces of the subject going missing. tables and pictures are in [study](study/)
+10 models tested on 100 photos from AIM-500, which come with hand-made masks. BiRefNet is off by 0.6%. ISNet, the best of the fast models, is off by 3.4%. Full results are in [study](study/).
 
-## todo
+## Todo
 
-- [ ] gpu numbers
-- [ ] transparent video that iphones play
-- [ ] the http worker that runs this behind the site
+- [ ] GPU numbers
+- [ ] Transparent video that plays on iPhones
+- [ ] The HTTP worker used on the site
 
-## thanks
+## Credits
 
-[rembg](https://github.com/danielgatis/rembg), [BiRefNet](https://github.com/ZhengPeng7/BiRefNet), [DIS / isnet](https://github.com/xuebinqin/DIS), [U-2-Net](https://github.com/xuebinqin/U-2-Net), [pymatting](https://github.com/pymatting/pymatting), [face-parsing](https://github.com/yakhyo/face-parsing), [YuNet](https://github.com/opencv/opencv_zoo), and [AIM-500](https://github.com/JizhiziLi/AIM) for the test photos (the pictures above are from it)
+[rembg](https://github.com/danielgatis/rembg), [BiRefNet](https://github.com/ZhengPeng7/BiRefNet), [DIS / ISNet](https://github.com/xuebinqin/DIS), [U-2-Net](https://github.com/xuebinqin/U-2-Net), [pymatting](https://github.com/pymatting/pymatting), [face-parsing](https://github.com/yakhyo/face-parsing), [YuNet](https://github.com/opencv/opencv_zoo). Test photos and the pictures above are from [AIM-500](https://github.com/JizhiziLi/AIM).
